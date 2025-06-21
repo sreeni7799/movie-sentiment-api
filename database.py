@@ -2,7 +2,7 @@ from pymongo import MongoClient
 import os
 
 # Use env variable or fallback to local MongoDB
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://sreeni7799:D1cHsheQG01wcnzn@cluster0.yubwquq.mongodb.net/")
 client = MongoClient(MONGO_URI)
 mongo_db = client["sentiment_db"]
 results_collection = mongo_db["results"]
