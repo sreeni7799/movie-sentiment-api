@@ -160,6 +160,7 @@ def analyze_csv():
         df = df.dropna(subset=required_columns)
         cleaned_count = len(df)
         
+        
         if cleaned_count == 0:
             return jsonify({
                 "error": "No valid data found after removing empty rows",
