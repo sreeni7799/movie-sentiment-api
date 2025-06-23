@@ -25,7 +25,7 @@ try:
     decode_responses=True,
     encoding='utf-8',
     encoding_errors='strict'
-    )
+)
     redis_conn.ping()
     sentiment_queue = Queue('sentiment_analysis', connection=redis_conn)
     print("Redis connected")
@@ -118,6 +118,7 @@ def analyze_csv():
             return jsonify({"error": "No CSV file provided"}), 400
         
         file = request.files['csv_file']
+
         if file.filename == '' or not file.filename.lower().endswith('.csv'):
             return jsonify({"error": "Please select a valid CSV file"}), 400
 
@@ -133,7 +134,7 @@ def analyze_csv():
         try:
             df = pd.read_csv(file)
         except Exception as e:
-            return jsonify({"error": f"Failed to read CSV file: {str(e)}"}), 400
+            return jsonify({"error": f"Invalid CSV format: {str(e)}"}), 400
             
         print(f"CSV loaded with {len(df)} rows and columns: {list(df.columns)}")
 
