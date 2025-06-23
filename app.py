@@ -17,15 +17,19 @@ from database import (
     get_database_stats 
 )
 
-# Redis
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Redis connection setup
 try:
     redis_conn = redis.Redis(
-    host='localhost', 
-    port=6379, 
-    decode_responses=True,
-    encoding='utf-8',
-    encoding_errors='strict'
-)
+        host='localhost', 
+        port=6379, 
+        decode_responses=True,
+        encoding='utf-8',
+        encoding_errors='strict'
+    )
     redis_conn.ping()
     sentiment_queue = Queue('sentiment_analysis', connection=redis_conn)
     print("Redis connected")
@@ -39,7 +43,6 @@ CORS(app)
 ML_SERVICE_URL = os.getenv('ML_SERVICE_URL', 'http://localhost:8000')
 UPLOAD_FOLDER = 'uploads'
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB 
-
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -119,9 +122,11 @@ def analyze_csv():
         
         file = request.files['csv_file']
 
+        # Enhanced file validation
         if file.filename == '' or not file.filename.lower().endswith('.csv'):
             return jsonify({"error": "Please select a valid CSV file"}), 400
 
+        # Check file size
         file.seek(0, 2) 
         file_size = file.tell()
         file.seek(0)
@@ -131,6 +136,7 @@ def analyze_csv():
                 "error": f"File too large. Maximum size: {MAX_FILE_SIZE/1024/1024:.1f}MB. Your file: {file_size/1024/1024:.1f}MB"
             }), 400
 
+        # Read and validate CSV
         try:
             df = pd.read_csv(file)
         except Exception as e:
@@ -138,6 +144,7 @@ def analyze_csv():
             
         print(f"CSV loaded with {len(df)} rows and columns: {list(df.columns)}")
 
+        # Check required columns
         required_columns = ['title', 'review']
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
@@ -148,6 +155,7 @@ def analyze_csv():
                 "help": "Please ensure your CSV has 'title' and 'review' columns"
             }), 400
 
+        # Clean data
         original_count = len(df)
         df = df.dropna(subset=required_columns)
         cleaned_count = len(df)
@@ -160,8 +168,8 @@ def analyze_csv():
         
         if cleaned_count < original_count:
             print(f"Removed {original_count - cleaned_count} rows with missing data")
-        
 
+        # Prepare batch data for ML service
         reviews_batch = []
         for _, row in df.iterrows():
             reviews_batch.append({
@@ -171,11 +179,10 @@ def analyze_csv():
 
         print(f"Sending {len(reviews_batch)} reviews to ML service at {ML_SERVICE_URL}")
 
-        use_background_processing = True
-    
+        # Try background processing first if available
+        use_background_processing = sentiment_queue is not None and len(reviews_batch) > 50  # Use background for larger batches
         
         if use_background_processing:
-            
             try:
                 job = sentiment_queue.enqueue(
                     'process_sentiment_batch',
@@ -194,8 +201,9 @@ def analyze_csv():
                 })
                 
             except Exception as queue_error:
-                print(f"Background processing failed")
+                print(f"Background processing failed, falling back to synchronous: {queue_error}")
         
+        # Synchronous processing
         print("Processing batch synchronously")
         
         try:
@@ -223,13 +231,14 @@ def analyze_csv():
                     "ml_response": ml_response.json()
                 }), 500
             
+            # Add metadata to results
             timestamp = datetime.now().isoformat()
             for result in batch_results:
                 result['timestamp'] = timestamp
                 result['processed_locally'] = True
                 result['processing_mode'] = 'synchronous'
-            
 
+            # Store results in database
             try:
                 insert_count = insert_results(batch_results)
                 
@@ -244,7 +253,7 @@ def analyze_csv():
                 })
                 
             except Exception as db_error:
-                print(f"Database error")
+                logger.error(f"Database error: {str(db_error)}")
                 return jsonify({
                     "error": "Results processed but failed to save to database",
                     "details": str(db_error),
@@ -252,7 +261,7 @@ def analyze_csv():
                 }), 500
                 
         else:
-            print(f"ML service error")
+            logger.error(f"ML service error: {ml_response.status_code} - {ml_response.text}")
             return jsonify({
                 "error": f"ML service returned error: {ml_response.status_code}",
                 "details": ml_response.text,
@@ -260,7 +269,7 @@ def analyze_csv():
             }), 500
 
     except Exception as e:
-        print(f"Error in analyse_csv")
+        logger.error(f"Error in analyze_csv: {str(e)}")
         return jsonify({
             "error": f"Internal server error: {str(e)}",
             "help": "Please check the server logs for more details"
@@ -424,23 +433,23 @@ def internal_error(error):
     return jsonify({"error": "Internal server error"}), 500
 
 if __name__ == '__main__':
-    print("Starting sentiment analysis")
+    print("Starting sentiment analysis API server")
+    print("=" * 60)
     print(f"ML Service URL: {ML_SERVICE_URL}")
     print(f"Upload Folder: {UPLOAD_FOLDER}")
-    print(f" Max File Size: {MAX_FILE_SIZE/1024/1024:.1f}MB")
-    print(" Database: Local MongoDB")
+    print(f"Max File Size: {MAX_FILE_SIZE/1024/1024:.1f}MB")
+    print("Database: Local MongoDB")
     
     db_stats = get_database_stats()
     if db_stats["status"] == "connected":
-        print(f" Database connected: {db_stats['total_documents']} documents, {db_stats['unique_movies']} movies")
+        print(f"✓ Database connected: {db_stats['total_documents']} documents, {db_stats['unique_movies']} movies")
     else:
-        print(" DB connection issue")
-    
+        print("✗ Database connection issue")
 
     if sentiment_queue is not None:
-        print(" Redis connected")
+        print("✓ Redis connected - Background processing enabled")
     else:
-        print(" Redis not available")
+        print("✗ Redis not available - Background processing disabled")
     
     print("=" * 60)
     print("Starting server on http://localhost:5000")
