@@ -20,11 +20,11 @@ from database import (
 # Redis
 try:
     redis_conn = redis.Redis(
-        host='localhost', 
-        port=6379, 
-        decode_responses=True,
-        encoding='utf-8',
-        encoding_errors='strict'
+    host='localhost', 
+    port=6379, 
+    decode_responses=True,
+    encoding='utf-8',
+    encoding_errors='strict'
     )
     redis_conn.ping()
     sentiment_queue = Queue('sentiment_analysis', connection=redis_conn)
