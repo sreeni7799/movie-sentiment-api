@@ -3,4 +3,4 @@ Flask-CORS==4.0.0
 pandas==2.1.1
 requests==2.31.0
 python-dotenv==1.0.0
-redis 
+redis==5.0.1
