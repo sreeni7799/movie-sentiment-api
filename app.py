@@ -7,7 +7,9 @@ import logging
 from datetime import datetime
 from rq import Queue
 import redis
-from database import (
+import sys
+sys.path.append('../shared') 
+from shared.database import (
     insert_results, 
     fetch_results_from_db, 
     clear_results_collection,
@@ -17,24 +19,18 @@ from database import (
     get_database_stats 
 )
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Redis connection setup
 try:
     redis_conn = redis.Redis(
-        host='localhost', 
-        port=6379, 
-        decode_responses=True,
-        encoding='utf-8',
-        encoding_errors='strict'
+        host=os.getenv('REDIS_HOST', 'localhost'), 
+        port=int(os.getenv('REDIS_PORT', 6379)), 
+        db=0
     )
     redis_conn.ping()
     sentiment_queue = Queue('sentiment_analysis', connection=redis_conn)
-    print("Redis connected")
+    print("Redis connected - Queue ready for worker service")
 except Exception as e:
     print(f"Redis connection failed: {e}")
+    print("Background processing will be disabled")
     sentiment_queue = None
 
 app = Flask(__name__)
@@ -121,12 +117,9 @@ def analyze_csv():
             return jsonify({"error": "No CSV file provided"}), 400
         
         file = request.files['csv_file']
-
-        # Enhanced file validation
         if file.filename == '' or not file.filename.lower().endswith('.csv'):
             return jsonify({"error": "Please select a valid CSV file"}), 400
 
-        # Check file size
         file.seek(0, 2) 
         file_size = file.tell()
         file.seek(0)
@@ -136,7 +129,6 @@ def analyze_csv():
                 "error": f"File too large. Maximum size: {MAX_FILE_SIZE/1024/1024:.1f}MB. Your file: {file_size/1024/1024:.1f}MB"
             }), 400
 
-        # Read and validate CSV
         try:
             df = pd.read_csv(file)
         except Exception as e:
@@ -144,7 +136,6 @@ def analyze_csv():
             
         print(f"CSV loaded with {len(df)} rows and columns: {list(df.columns)}")
 
-        # Check required columns
         required_columns = ['title', 'review']
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
@@ -155,7 +146,7 @@ def analyze_csv():
                 "help": "Please ensure your CSV has 'title' and 'review' columns"
             }), 400
 
-        # Clean data
+
         original_count = len(df)
         df = df.dropna(subset=required_columns)
         cleaned_count = len(df)
@@ -170,7 +161,6 @@ def analyze_csv():
         if cleaned_count < original_count:
             print(f"Removed {original_count - cleaned_count} rows with missing data")
 
-        # Prepare batch data for ML service
         reviews_batch = []
         for _, row in df.iterrows():
             reviews_batch.append({
@@ -178,15 +168,13 @@ def analyze_csv():
                 "movie_name": str(row['title'])
             })
 
-        print(f"Sending {len(reviews_batch)} reviews to ML service at {ML_SERVICE_URL}")
+        print(f"Prepared {len(reviews_batch)} reviews for processing")
 
-        # Try background processing first if available
-        use_background_processing = sentiment_queue is not None and len(reviews_batch) > 50  # Use background for larger batches
-        
+        use_background_processing = sentiment_queue is not None and len(reviews_batch) > 10  
         if use_background_processing:
             try:
                 job = sentiment_queue.enqueue(
-                    'process_sentiment_batch',
+                    'worker_tasks.process_sentiment_batch',
                     reviews_batch,
                     job_timeout='30m'
                 )
@@ -204,9 +192,7 @@ def analyze_csv():
             except Exception as queue_error:
                 print(f"Background processing failed, falling back to synchronous: {queue_error}")
         
-        # Synchronous processing
-        print("Processing batch synchronously")
-        
+    
         try:
             ml_response = requests.post(
                 f"{ML_SERVICE_URL}/process-batch", 
@@ -236,7 +222,7 @@ def analyze_csv():
             timestamp = datetime.now().isoformat()
             for result in batch_results:
                 result['timestamp'] = timestamp
-                result['processed_locally'] = True
+                result['processed_by'] = 'api_service_sync'
                 result['processing_mode'] = 'synchronous'
 
             # Store results in database
@@ -254,15 +240,15 @@ def analyze_csv():
                 })
                 
             except Exception as db_error:
-                logger.error(f"Database error: {str(db_error)}")
+                print(f"Database error: {str(db_error)}")
                 return jsonify({
                     "error": "Results processed but failed to save to database",
                     "details": str(db_error),
-                    "help": "Please check your MongoDB connection"
+                    "help": "Please check  MongoDB connection"
                 }), 500
                 
         else:
-            logger.error(f"ML service error: {ml_response.status_code} - {ml_response.text}")
+            print(f"ML service error: {ml_response.status_code} - {ml_response.text}")
             return jsonify({
                 "error": f"ML service returned error: {ml_response.status_code}",
                 "details": ml_response.text,
@@ -270,7 +256,7 @@ def analyze_csv():
             }), 500
 
     except Exception as e:
-        logger.error(f"Error in analyze_csv: {str(e)}")
+        print(f"Error in analyze_csv: {str(e)}")
         return jsonify({
             "error": f"Internal server error: {str(e)}",
             "help": "Please check the server logs for more details"
@@ -410,6 +396,40 @@ def get_job_status(job_id):
         
     except Exception as e:
         return jsonify({"error": f"Failed to get job status: {str(e)}"}), 500
+    
+@app.route('/api/worker/status', methods=['GET'])
+def worker_service_status():
+    if sentiment_queue is None:
+        return jsonify({
+            "worker_service": "unavailable",
+            "redis_status": "disconnected",
+            "message": "Redis not available"
+        })
+    
+    try:
+        queue_length = len(sentiment_queue)
+        failed_jobs = len(sentiment_queue.failed_job_registry)
+        
+        workers = sentiment_queue.workers
+        active_workers = len(workers)
+        
+        return jsonify({
+            "worker_service": "available" if active_workers > 0 else "no_workers",
+            "redis_status": "connected",
+            "queue_stats": {
+                "pending_jobs": queue_length,
+                "failed_jobs": failed_jobs,
+                "active_workers": active_workers
+            },
+            "message": f"{active_workers} worker(s) active, {queue_length} jobs pending",
+            "success": True
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "error": f"Failed to get worker status: {str(e)}",
+            "success": False
+        }), 500
 
 @app.errorhandler(404)
 def not_found(error):
@@ -435,7 +455,6 @@ def internal_error(error):
 
 if __name__ == '__main__':
     print("Starting sentiment analysis API server")
-    print("=" * 60)
     print(f"ML Service URL: {ML_SERVICE_URL}")
     print(f"Upload Folder: {UPLOAD_FOLDER}")
     print(f"Max File Size: {MAX_FILE_SIZE/1024/1024:.1f}MB")
@@ -443,16 +462,15 @@ if __name__ == '__main__':
     
     db_stats = get_database_stats()
     if db_stats["status"] == "connected":
-        print(f"✓ Database connected: {db_stats['total_documents']} documents, {db_stats['unique_movies']} movies")
+        print(f"Database connected: {db_stats['total_documents']} documents, {db_stats['unique_movies']} movies")
     else:
-        print("✗ Database connection issue")
+        print("Database connection issue")
 
     if sentiment_queue is not None:
-        print("✓ Redis connected - Background processing enabled")
+        print("Redis connected - Background processing enabled")
     else:
-        print("✗ Redis not available - Background processing disabled")
+        print("Redis not available - Background processing disabled")
     
-    print("=" * 60)
     print("Starting server on http://localhost:5000")
     print("API Documentation: http://localhost:5000/api/test")
     

@@ -7975,3 +7975,4 @@ venv/lib/python3.12/site-packages/pymongo-4.13.2.dist-info/RECORD
 venv/lib/python3.12/site-packages/pymongo-4.13.2.dist-info/REQUESTED
 venv/lib/python3.12/site-packages/pymongo-4.13.2.dist-info/WHEEL
 venv/lib/python3.12/site-packages/pymongo-4.13.2.dist-info/licenses/LICENSE
+shared/__pycache__/database.cpython-312.pyc
