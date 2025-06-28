@@ -1,11 +1,8 @@
 from pymongo import MongoClient
 import re
-import os
-
-MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
 
 try:
-    client = MongoClient(MONGO_URI)
+    client = MongoClient("mongodb://localhost:27017/")
 
     client.admin.command('ping')
     print("connected to MongoDB")
