@@ -29,8 +29,7 @@ try:
     sentiment_queue = Queue('sentiment_analysis', connection=redis_conn)
     print("Redis connected - Queue ready for worker service")
 except Exception as e:
-    print(f"Redis connection failed: {e}")
-    print("Background processing will be disabled")
+    print("Background processing disabled")
     sentiment_queue = None
 
 app = Flask(__name__)
@@ -55,16 +54,10 @@ def health_check():
     redis_status = "connected" if sentiment_queue is not None else "disconnected"
     
     return jsonify({
-        "status": "API service is running locally",
-        "timestamp": datetime.now().isoformat(),
+        "status": "API service is running ",
         "ml_service_status": ml_status,
-        "ml_service_url": ML_SERVICE_URL,
         "database_stats": db_stats,
         "redis_status": redis_status,
-        "background_processing": "enabled" if sentiment_queue is not None else "disabled",
-        "environment": "local_development",
-        "upload_folder": UPLOAD_FOLDER,
-        "max_file_size_mb": MAX_FILE_SIZE / (1024 * 1024)
     })
 
 @app.route('/api/database/stats', methods=['GET'])
@@ -86,17 +79,11 @@ def redis_status():
     try:
         if sentiment_queue is None:
             return jsonify({
-                "redis_status": "disconnected",
-                "message": "Redis not available",
-                "background_processing": "disabled"
+                "redis_status": "disconnected"
             })
         
         queue_info = {
-            "redis_status": "connected",
-            "queue_name": sentiment_queue.name,
-            "pending_jobs": len(sentiment_queue),
-            "failed_jobs": len(sentiment_queue.failed_job_registry),
-            "background_processing": "enabled"
+            "redis_status": "connected"
         }
         
         return jsonify({
@@ -105,10 +92,7 @@ def redis_status():
         })
         
     except Exception as e:
-        return jsonify({
-            "error": f"Failed to get Redis status: {str(e)}",
-            "success": False
-        }), 500
+        return jsonify({"error": "Redis not available"}), 500
 
 @app.route('/api/analyze-csv', methods=['POST'])
 def analyze_csv():
@@ -132,19 +116,14 @@ def analyze_csv():
         try:
             df = pd.read_csv(file)
         except Exception as e:
-            return jsonify({"error": f"Invalid CSV format: {str(e)}"}), 400
+            return jsonify({"error": "Invalid CSV format"}), 400
             
-        print(f"CSV loaded with {len(df)} rows and columns: {list(df.columns)}")
 
         required_columns = ['title', 'review']
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             return jsonify({
-                "error": f"Missing required columns: {missing_columns}",
-                "found_columns": list(df.columns),
-                "required_columns": required_columns,
-                "help": "Please ensure your CSV has 'title' and 'review' columns"
-            }), 400
+                "error": "Missing required columns"}), 400
 
 
         original_count = len(df)
@@ -154,9 +133,7 @@ def analyze_csv():
         
         if cleaned_count == 0:
             return jsonify({
-                "error": "No valid data found after removing empty rows",
-                "help": "Please check that your CSV has data in both 'title' and 'review' columns"
-            }), 400
+                "error": "No valid data found after removing empty rows",}), 400
         
         if cleaned_count < original_count:
             print(f"Removed {original_count - cleaned_count} rows with missing data")
@@ -167,8 +144,6 @@ def analyze_csv():
                 "text": str(row['review']), 
                 "movie_name": str(row['title'])
             })
-
-        print(f"Prepared {len(reviews_batch)} reviews for processing")
 
         use_background_processing = sentiment_queue is not None and len(reviews_batch) > 10  
         if use_background_processing:
@@ -201,12 +176,10 @@ def analyze_csv():
             )
         except requests.exceptions.Timeout:
             return jsonify({
-                "error": "ML service timeout. Please try with a smaller file or check if ML service is running.",
-                "help": "For large files, make sure Redis is running to enable background processing"
-            }), 504
+                "error": "ML service timeout"}), 504
         except requests.exceptions.ConnectionError:
             return jsonify({
-                "error": f"Cannot connect to ML service at {ML_SERVICE_URL}. Please check if it's running."
+                "error": f"Cannot connect to ML service at {ML_SERVICE_URL}"
             }), 503
 
         if ml_response.status_code == 200:
@@ -214,9 +187,8 @@ def analyze_csv():
             
             if not batch_results:
                 return jsonify({
-                    "error": "ML service returned no results",
-                    "ml_response": ml_response.json()
-                }), 500
+                    "error": "ML service returned no results"
+                    }), 500
             
             # Add metadata to results
             timestamp = datetime.now().isoformat()
@@ -242,24 +214,19 @@ def analyze_csv():
             except Exception as db_error:
                 print(f"Database error: {str(db_error)}")
                 return jsonify({
-                    "error": "Results processed but failed to save to database",
-                    "details": str(db_error),
-                    "help": "Please check  MongoDB connection"
+                    "error": "Results processed but failed to save to database"
                 }), 500
                 
         else:
             print(f"ML service error: {ml_response.status_code} - {ml_response.text}")
             return jsonify({
-                "error": f"ML service returned error: {ml_response.status_code}",
-                "details": ml_response.text,
-                "help": "Please check if your ML service is running and accessible"
+                "error": f"ML service returned error: {ml_response.status_code}"
             }), 500
 
     except Exception as e:
         print(f"Error in analyze_csv: {str(e)}")
         return jsonify({
-            "error": f"Internal server error: {str(e)}",
-            "help": "Please check the server logs for more details"
+            "error": "Internal server error}"
         }), 500
 
 @app.route('/api/search', methods=['GET'])
@@ -270,9 +237,7 @@ def search_movies():
     
         if sentiment and sentiment not in ['positive', 'negative']:
             return jsonify({
-                "error": "Invalid sentiment. Must be 'positive' or 'negative'",
-                "received": sentiment
-            }), 400
+                "error": "Invalid sentiment"}), 400
         
         use_background_search = sentiment_queue is not None and request.args.get('background') == 'true'
         
@@ -454,12 +419,7 @@ def internal_error(error):
     return jsonify({"error": "Internal server error"}), 500
 
 if __name__ == '__main__':
-    print("Starting sentiment analysis API server")
-    print(f"ML Service URL: {ML_SERVICE_URL}")
-    print(f"Upload Folder: {UPLOAD_FOLDER}")
-    print(f"Max File Size: {MAX_FILE_SIZE/1024/1024:.1f}MB")
-    print("Database: Local MongoDB")
-    
+    print("Starting API server")
     db_stats = get_database_stats()
     if db_stats["status"] == "connected":
         print(f"Database connected: {db_stats['total_documents']} documents, {db_stats['unique_movies']} movies")
@@ -467,11 +427,8 @@ if __name__ == '__main__':
         print("Database connection issue")
 
     if sentiment_queue is not None:
-        print("Redis connected - Background processing enabled")
+        print("Redis connected")
     else:
-        print("Redis not available - Background processing disabled")
-    
-    print("Starting server on http://localhost:5000")
-    print("API Documentation: http://localhost:5000/api/test")
+        print("Redis not available")
     
     app.run(host='0.0.0.0', port=5000, debug=True)
