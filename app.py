@@ -145,7 +145,7 @@ def analyze_csv():
                 "movie_name": str(row['title'])
             })
 
-        use_background_processing = sentiment_queue is not None and len(reviews_batch) > 10  
+        use_background_processing = sentiment_queue is not None and len(reviews_batch) > 1000  
         if use_background_processing:
             try:
                 job = sentiment_queue.enqueue(
