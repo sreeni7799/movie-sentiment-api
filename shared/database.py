@@ -17,7 +17,7 @@ try:
     if existing_count > 0:
         print(f"Found {existing_count} existing records in database")
     else:
-        print(" Local database is empty")
+        print(" Local database  empty")
     
 except Exception as e:
     print(f" Failed to connect to MongoDB!")
